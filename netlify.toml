@@ -1,0 +1,7 @@
+[functions]
+  directory = "netlify/functions"
+
+# Optional: If you want Netlify to build your site (though for a single HTML file, it's simple)
+[build]
+  publish = "." # Or your publish directory if you have a build step
+  command = ""  # No build command needed for a static HTML file

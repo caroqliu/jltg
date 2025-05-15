@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Simple Google Sheets Scoreboard</title>
+  <title>Google Sheets Scoreboard</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -72,6 +72,61 @@
       margin-bottom: 20px;
       text-align: center;
       display: none;
+    }
+    
+    .auth-container {
+      margin-bottom: 20px;
+      text-align: center;
+      padding: 20px;
+      background-color: #f8f9fa;
+      border-radius: 4px;
+      display: none;
+    }
+    
+    #authorize_button {
+      background-color: #4285F4;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 10px 20px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    
+    #signout_button {
+      background-color: #6c757d;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 10px 20px;
+      cursor: pointer;
+      font-size: 16px;
+      margin-left: 10px;
+    }
+    
+    .sheet-config {
+      margin-bottom: 20px;
+      padding: 15px;
+      background-color: #f8f9fa;
+      border-radius: 4px;
+      display: none;
+    }
+    
+    .sheet-config input {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 10px;
+      border: 1px solid #ced4da;
+      border-radius: 4px;
+    }
+    
+    .sheet-config button {
+      background-color: #28a745;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 8px 16px;
+      cursor: pointer;
     }
     
     .scoreboard-header {
@@ -208,52 +263,33 @@
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
     }
-
-    .config-notice {
-      margin-bottom: 20px;
-      padding: 15px;
-      background-color: #fff3cd;
-      border-left: 4px solid #ffc107;
-      color: #856404;
-    }
-
-    .instructions {
-      margin-top: 30px;
-      padding: 15px;
-      background-color: #f8f9fa;
-      border-radius: 4px;
-      font-size: 14px;
-    }
-
-    .instructions h3 {
-      margin-top: 0;
-    }
-
-    .instructions ol {
-      padding-left: 20px;
-    }
-
-    .instructions code {
-      background-color: #e9ecef;
-      padding: 2px 4px;
-      border-radius: 3px;
-      font-family: monospace;
-    }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>Team Scoreboard</h1>
+    <h1>Team Scoreboard with Google Sheets</h1>
     
-    <div id="config-notice" class="config-notice">
-      <strong>Note:</strong> This scoreboard is configured to load data from Google Sheets. 
-      To use your own sheet, modify the <code>SPREADSHEET_ID</code> in the JavaScript.
+    <!-- Google Sign-in -->
+    <div id="auth-container" class="auth-container">
+      <p>Sign in with your Google account to access your scoreboard sheet:</p>
+      <button id="authorize_button">Sign In with Google</button>
+      <button id="signout_button">Sign Out</button>
     </div>
-    
+
+    <!-- Sheet Configuration -->
+    <div id="sheet-config" class="sheet-config">
+      <h3>Google Sheet Configuration</h3>
+      <p>Enter your Google Sheet ID (found in the URL of your spreadsheet):</p>
+      <input type="text" id="sheet-id" placeholder="e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms">
+      <p>Enter the name of the sheet (tab) with your scoreboard data:</p>
+      <input type="text" id="sheet-name" placeholder="e.g. Sheet1" value="Scoreboard">
+      <button id="save-sheet-config">Connect to Sheet</button>
+    </div>
+
     <!-- Loading indicator -->
     <div id="loading" class="loading">
       <div class="spinner"></div>
-      <p>Loading data from Google Sheet...</p>
+      <p>Loading data from Google Sheets...</p>
     </div>
 
     <!-- Error message -->
@@ -262,14 +298,14 @@
     <!-- Google Sheets sync status -->
     <div class="sync-container">
       <div class="sync-status">
-        Status: <span id="sync-status-text">Not loaded</span>
+        Status: <span id="sync-status-text">Not connected</span>
         <span id="last-sync-time"></span>
       </div>
-      <button id="refresh-button" class="sync-button">Refresh Data</button>
+      <button id="sync-button" class="sync-button" disabled>Sync with Google Sheets</button>
     </div>
     
     <div id="sync-message" class="sync-message">
-      Successfully loaded data from Google Sheet!
+      Successfully synced with Google Sheets!
     </div>
     
     <!-- Scoreboard -->
@@ -290,54 +326,115 @@
         id="new-team-input" 
         class="team-input" 
         placeholder="Enter team name"
+        disabled
       >
-      <button id="add-team-button" class="add-button">Add Team</button>
+      <button id="add-team-button" class="add-button" disabled>Add Team</button>
     </div>
-
   </div>
 
+  <!-- Load the Google API client library -->
+  <script src="https://apis.google.com/js/api.js"></script>
+  <script src="https://accounts.google.com/gsi/client"></script>
+
   <script>
-    // CONFIGURATION - Replace this with your own spreadsheet ID
-    // The ID is the long string of characters in the sheet URL
-    const SPREADSHEET_ID = '1KySndDNL4-9MCvbjjOEjYeEMz8X4OrehflK-kHpG-Mg'; // Example ID
-    const SHEET_INDEX = 1; // First sheet is 1, second is 2, etc.
+    let CLIENT_ID = ''; // Will be set by fetchConfig
+    let API_KEY = '';   // Will be set by fetchConfig
     
-    // Construct the CSV URL from Google Sheets
-    const SHEET_URL = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQR0yMJRw9LRom2psACftvwpHawMyuG2IZNAwf5HYIE5kLbTrIgr7x4GLU9Iv2UVONFi_u69XZJ6P50/pub?output=csv`;
+    // Discovery doc URL for Google Sheets API v4
+    const DISCOVERY_DOC = 'https://sheets.googleapis.com/$discovery/rest?version=v4';
+    
+    // Authorization scopes required by the API
+    const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
     
     let teams = [];
+    let gapiInited = false;
+    let gisInited = false;
+    let tokenClient;
+    let sheetId = '';
+    let sheetName = 'Scoreboard';
     
     // DOM elements
     const teamsContainer = document.getElementById('teams-container');
     const newTeamInput = document.getElementById('new-team-input');
     const addTeamButton = document.getElementById('add-team-button');
-    const refreshButton = document.getElementById('refresh-button');
+    const syncButton = document.getElementById('sync-button');
     const syncStatusText = document.getElementById('sync-status-text');
     const lastSyncTimeSpan = document.getElementById('last-sync-time');
     const syncMessage = document.getElementById('sync-message');
+    const authContainer = document.getElementById('auth-container');
+    const authorizeButton = document.getElementById('authorize_button');
+    const signoutButton = document.getElementById('signout_button');
+    const sheetConfig = document.getElementById('sheet-config');
+    const sheetIdInput = document.getElementById('sheet-id');
+    const sheetNameInput = document.getElementById('sheet-name');
+    const saveSheetConfigButton = document.getElementById('save-sheet-config');
     const loadingElement = document.getElementById('loading');
     const errorMessageElement = document.getElementById('error-message');
-    const configNotice = document.getElementById('config-notice');
     
-    // Initialize the app
-    document.addEventListener('DOMContentLoaded', () => {
-      // Check if using the default ID
-      if (SPREADSHEET_ID === '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms') {
-        configNotice.style.display = 'block';
-      } else {
-        configNotice.style.display = 'none';
+    document.addEventListener('DOMContentLoaded', fetchConfigAndInitialize); 
+
+    async function fetchConfigAndInitialize() {
+      try {
+        const response = await fetch('/.netlify/functions/config');
+        if (!response.ok) {
+          throw new Error(`Failed to fetch config: ${response.statusText}`);
+        }
+        const config = await response.json();
+        CLIENT_ID = config.clientId;
+        API_KEY = config.apiKey;
+
+        if (!CLIENT_ID || !API_KEY) {
+          showError('Configuration variables (Client ID or API Key) are missing. Please check Netlify environment variables.');
+          console.error('Missing CLIENT_ID or API_KEY from Netlify function.');
+          return;
+        }
+        
+        // Now that we have the config, proceed with initialization
+        initializeApp();
+
+      } catch (error) {
+        console.error('Error fetching app configuration:', error);
+        showError(`Could not load app configuration: ${error.message}. Ensure the Netlify function is deployed and environment variables are set.`);
+        // Display a user-friendly error and prevent app from initializing further
+        // You might want to hide the main app content and show only the error.
       }
+    }
+
+    // initializeApp remains mostly the same, but it's now called by fetchConfigAndInitialize
+    function initializeApp() {
+      gapi.load('client', initializeGapiClient);
       
-      // Load data on startup
-      loadSheetData();
-      
-      // Add event listeners
-      addTeamButton.addEventListener('click', addTeam);
-      newTeamInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') addTeam();
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: CLIENT_ID, // Uses the fetched CLIENT_ID
+        scope: SCOPES,
+        callback: '', 
       });
-      refreshButton.addEventListener('click', loadSheetData);
-    });
+      
+      gisInited = true;
+      maybeEnableButtons();
+    }
+
+    async function initializeGapiClient() {
+      // Make sure API_KEY is available
+      if (!API_KEY) {
+        console.error("API Key is not available for GAPI client initialization.");
+        showError("API Key is missing. Cannot initialize Google API client.");
+        return;
+      }
+      await gapi.client.init({
+        apiKey: API_KEY, // Uses the fetched API_KEY
+        discoveryDocs: [DISCOVERY_DOC],
+      });
+      gapiInited = true;
+      maybeEnableButtons();
+    }
+
+    function maybeEnableButtons() {
+      if (gapiInited && gisInited) {
+        authContainer.style.display = 'block';
+        authorizeButton.disabled = false;
+      }
+    }
     
     // Render the scoreboard
     function renderScoreboard() {
@@ -345,7 +442,7 @@
       teamsContainer.innerHTML = '';
       
       if (teams.length === 0) {
-        teamsContainer.innerHTML = '<div class="scoreboard-empty">No teams loaded. Check your Google Sheet or add a team below.</div>';
+        teamsContainer.innerHTML = '<div class="scoreboard-empty">No teams added yet. Add a team below.</div>';
         return;
       }
       
@@ -380,6 +477,11 @@
       document.querySelectorAll('.remove-button').forEach(button => {
         button.addEventListener('click', () => removeTeam(Number(button.dataset.id)));
       });
+
+      // Enable form elements
+      newTeamInput.disabled = false;
+      addTeamButton.disabled = false;
+      syncButton.disabled = false;
     }
     
     // Increment score for a team
@@ -387,7 +489,7 @@
       teams = teams.map(team => 
         team.id === teamId ? { ...team, score: team.score + 1 } : team
       );
-      updateSyncStatus('Modified (refresh to reload from sheet)');
+      updateSyncStatus('Changes not saved');
       renderScoreboard();
     }
     
@@ -396,7 +498,7 @@
       teams = teams.map(team => 
         team.id === teamId ? { ...team, score: Math.max(0, team.score - 1) } : team
       );
-      updateSyncStatus('Modified (refresh to reload from sheet)');
+      updateSyncStatus('Changes not saved');
       renderScoreboard();
     }
     
@@ -414,14 +516,14 @@
       
       teams.push(newTeam);
       newTeamInput.value = '';
-      updateSyncStatus('Modified (refresh to reload from sheet)');
+      updateSyncStatus('Changes not saved');
       renderScoreboard();
     }
     
     // Remove a team
     function removeTeam(teamId) {
       teams = teams.filter(team => team.id !== teamId);
-      updateSyncStatus('Modified (refresh to reload from sheet)');
+      updateSyncStatus('Changes not saved');
       renderScoreboard();
     }
     
@@ -429,76 +531,237 @@
     function updateSyncStatus(status) {
       syncStatusText.textContent = status;
       
-      if (status === 'Loaded') {
+      if (status === 'Synced') {
         syncStatusText.style.color = '#28a745';
-      } else if (status.includes('Error')) {
+      } else if (status === 'Error') {
         syncStatusText.style.color = '#dc3545';
       } else {
         syncStatusText.style.color = '#ffc107';
       }
     }
 
-    // Parse CSV data
-    function parseCSV(text) {
-      const lines = text.split('\n');
-      const headers = lines[0].split(',');
+    // Handle authentication
+    function handleAuthClick() {
+      tokenClient.callback = async (resp) => {
+        if (resp.error !== undefined) {
+          throw resp;
+        }
+        
+        signoutButton.style.display = 'inline-block';
+        authorizeButton.innerText = 'Refresh Token';
+        sheetConfig.style.display = 'block';
+        
+        // Load saved sheet configuration if available
+        const savedSheetId = localStorage.getItem('scoreboardSheetId');
+        const savedSheetName = localStorage.getItem('scoreboardSheetName');
+        
+        if (savedSheetId) {
+          sheetIdInput.value = savedSheetId;
+          sheetName = savedSheetName || 'Scoreboard';
+          sheetNameInput.value = sheetName;
+          
+          // If we have a saved sheet ID, load data automatically
+          loadSheetData(savedSheetId, sheetName);
+        }
+      };
+
+      if (gapi.client.getToken() === null) {
+        tokenClient.requestAccessToken({ prompt: 'consent' });
+      } else {
+        tokenClient.requestAccessToken({ prompt: '' });
+      }
+    }
+
+    // Handle sign out
+    function handleSignoutClick() {
+      const token = gapi.client.getToken();
+      if (token !== null) {
+        google.accounts.oauth2.revoke(token.access_token);
+        gapi.client.setToken('');
+        
+        // Reset UI
+        authorizeButton.innerText = 'Sign In with Google';
+        authorizeButton.style.display = 'inline-block';
+        signoutButton.style.display = 'none';
+        sheetConfig.style.display = 'none';
+        
+        // Clear teams
+        teams = [];
+        renderScoreboard();
+        
+        // Update status
+        updateSyncStatus('Not connected');
+        
+        // Disable form elements
+        newTeamInput.disabled = true;
+        addTeamButton.disabled = true;
+        syncButton.disabled = true;
+      }
+    }
+
+    // Save sheet configuration
+    function saveSheetConfig() {
+      const newSheetId = sheetIdInput.value.trim();
+      const newSheetName = sheetNameInput.value.trim() || 'Scoreboard';
       
-      // Find the column indices
-      const idIndex = headers.findIndex(h => h.trim().toLowerCase() === 'id');
-      const nameIndex = headers.findIndex(h => h.trim().toLowerCase() === 'team name');
-      const scoreIndex = headers.findIndex(h => h.trim().toLowerCase() === 'score');
-      
-      if (idIndex === -1 || nameIndex === -1 || scoreIndex === -1) {
-        throw new Error('CSV must have columns for "ID", "Team Name", and "Score"');
+      if (!newSheetId) {
+        showError('Please enter a valid Google Sheet ID');
+        return;
       }
       
-      const result = [];
+      // Save to localStorage for future sessions
+      localStorage.setItem('scoreboardSheetId', newSheetId);
+      localStorage.setItem('scoreboardSheetName', newSheetName);
       
-      // Skip the header row
-      for (let i = 1; i < lines.length; i++) {
-        if (!lines[i].trim()) continue; // Skip empty lines
-        
-        const values = lines[i].split(',');
-        
-        // Make sure we have values for all required fields
-        if (values.length <= Math.max(idIndex, nameIndex, scoreIndex)) continue;
-        
-        const id = parseInt(values[idIndex].trim());
-        const name = values[nameIndex].trim();
-        const score = parseInt(values[scoreIndex].trim()) || 0;
-        
-        if (isNaN(id) || !name) continue; // Skip invalid entries
-        
-        result.push({ id, name, score });
-      }
-      
-      return result;
+      // Load data from the sheet
+      loadSheetData(newSheetId, newSheetName);
     }
 
     // Load data from Google Sheet
-    async function loadSheetData() {
+    async function loadSheetData(id, tabName) {
+      sheetId = id;
+      sheetName = tabName;
+      
       showLoading(true);
       hideError();
-      updateSyncStatus('Loading...');
       
       try {
-        // Fetch the CSV data from the published Google Sheet
-        const response = await fetch(SHEET_URL);
+        // First, check if the spreadsheet and sheet exist
+        const response = await gapi.client.sheets.spreadsheets.get({
+          spreadsheetId: sheetId
+        });
         
-        if (!response.ok) {
-          throw new Error(`Failed to load data: ${response.status} ${response.statusText}`);
+        // Look for the sheet with the specified name
+        const sheet = response.result.sheets.find(s => 
+          s.properties.title === sheetName
+        );
+        
+        if (!sheet) {
+          // Sheet doesn't exist, create it
+          await createNewSheet();
+        } else {
+          // Sheet exists, load the data
+          await fetchTeamsFromSheet();
         }
         
-        const csvText = await response.text();
-        teams = parseCSV(csvText);
-        
-        // Update UI
-        renderScoreboard();
-        updateSyncStatus('Loaded');
-        
-        // Update last sync time
+        updateSyncStatus('Synced');
         const now = new Date();
-        lastSyncTimeSpan.textContent = ` • Last refresh: ${now.toLocaleTimeString()}`;
+        lastSyncTimeSpan.textContent = ` • Last sync: ${now.toLocaleTimeString()}`;
+        
+        showLoading(false);
+      } catch (error) {
+        console.error('Error loading sheet data:', error);
+        showError('Could not access the Google Sheet. Make sure the Sheet ID is correct and you have permission to access it.');
+        updateSyncStatus('Error');
+        showLoading(false);
+      }
+    }
+
+    // Create a new sheet if it doesn't exist
+    async function createNewSheet() {
+      try {
+        // Add a new sheet with the specified name
+        await gapi.client.sheets.spreadsheets.batchUpdate({
+          spreadsheetId: sheetId,
+          resource: {
+            requests: [{
+              addSheet: {
+                properties: {
+                  title: sheetName
+                }
+              }
+            }]
+          }
+        });
+        
+        // Set up headers
+        await gapi.client.sheets.spreadsheets.values.update({
+          spreadsheetId: sheetId,
+          range: `${sheetName}!A1:C1`,
+          valueInputOption: 'RAW',
+          resource: {
+            values: [['ID', 'Team Name', 'Score']]
+          }
+        });
+        
+        // Initialize with empty teams array
+        teams = [];
+        renderScoreboard();
+        
+      } catch (error) {
+        console.error('Error creating new sheet:', error);
+        showError('Could not create a new sheet. Please check your permissions.');
+      }
+    }
+
+    // Fetch teams data from Google Sheet
+    async function fetchTeamsFromSheet() {
+      try {
+        const response = await gapi.client.sheets.spreadsheets.values.get({
+          spreadsheetId: sheetId,
+          range: `${sheetName}!A2:C`
+        });
+        
+        const rows = response.result.values || [];
+        
+        if (rows.length === 0) {
+          teams = [];
+        } else {
+          teams = rows.map((row, index) => {
+            // Handle cases where some cells might be empty
+            const id = row[0] ? parseInt(row[0]) : index + 1;
+            const name = row[1] || `Team ${id}`;
+            const score = row[2] ? parseInt(row[2]) : 0;
+            
+            return { id, name, score };
+          });
+        }
+        
+        renderScoreboard();
+        
+      } catch (error) {
+        console.error('Error fetching teams:', error);
+        showError('Could not load team data from the sheet.');
+      }
+    }
+
+    // Sync teams data to Google Sheet
+    async function syncWithGoogleSheets() {
+      if (!sheetId) {
+        showError('Please configure your Google Sheet first');
+        return;
+      }
+      
+      updateSyncStatus('Syncing...');
+      showLoading(true);
+      hideError();
+      
+      try {
+        // Prepare data for the sheet
+        const values = teams.map(team => [team.id, team.name, team.score]);
+        
+        // Clear existing data (except header row)
+        await gapi.client.sheets.spreadsheets.values.clear({
+          spreadsheetId: sheetId,
+          range: `${sheetName}!A2:C`
+        });
+        
+        // Write new data
+        if (values.length > 0) {
+          await gapi.client.sheets.spreadsheets.values.update({
+            spreadsheetId: sheetId,
+            range: `${sheetName}!A2:C${values.length + 1}`,
+            valueInputOption: 'RAW',
+            resource: {
+              values: values
+            }
+          });
+        }
+        
+        // Update sync status
+        const now = new Date();
+        updateSyncStatus('Synced');
+        lastSyncTimeSpan.textContent = ` • Last sync: ${now.toLocaleTimeString()}`;
         
         // Show success message
         syncMessage.style.display = 'block';
@@ -506,22 +769,13 @@
           syncMessage.style.display = 'none';
         }, 3000);
         
+        showLoading(false);
       } catch (error) {
-        console.error('Error loading data:', error);
-        showError(`Failed to load sheet data: ${error.message}`);
-        updateSyncStatus('Error loading');
-        
-        // Initialize with empty teams if we can't load
-        if (teams.length === 0) {
-          teams = [
-            { id: 1, name: 'Team Alpha', score: 0 },
-            { id: 2, name: 'Team Beta', score: 0 }
-          ];
-          renderScoreboard();
-        }
+        console.error('Error syncing with Google Sheets:', error);
+        showError('Failed to sync with Google Sheets.');
+        updateSyncStatus('Error');
+        showLoading(false);
       }
-      
-      showLoading(false);
     }
 
     // Helper functions for UI
@@ -537,6 +791,18 @@
     function hideError() {
       errorMessageElement.style.display = 'none';
     }
+    
+    // Event listeners
+    addTeamButton.addEventListener('click', addTeam);
+    
+    newTeamInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') addTeam();
+    });
+    
+    syncButton.addEventListener('click', syncWithGoogleSheets);
+    authorizeButton.addEventListener('click', handleAuthClick);
+    signoutButton.addEventListener('click', handleSignoutClick);
+    saveSheetConfigButton.addEventListener('click', saveSheetConfig);
   </script>
 </body>
 </html>
