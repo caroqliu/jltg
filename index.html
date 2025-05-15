@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Dynamic Team Scoreboard</title>
+  <title>Simple Google Sheets Scoreboard</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -56,6 +56,17 @@
       background-color: #d4edda;
       color: #155724;
       border: 1px solid #c3e6cb;
+      border-radius: 4px;
+      padding: 10px;
+      margin-bottom: 20px;
+      text-align: center;
+      display: none;
+    }
+
+    .error-message {
+      background-color: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
       border-radius: 4px;
       padding: 10px;
       margin-bottom: 20px;
@@ -175,23 +186,90 @@
     .add-button:hover {
       background-color: #3367D6;
     }
+
+    .loading {
+      text-align: center;
+      padding: 20px;
+      color: #6c757d;
+      display: none;
+    }
+
+    .spinner {
+      border: 4px solid rgba(0, 0, 0, 0.1);
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border-left-color: #4285F4;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 10px auto;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .config-notice {
+      margin-bottom: 20px;
+      padding: 15px;
+      background-color: #fff3cd;
+      border-left: 4px solid #ffc107;
+      color: #856404;
+    }
+
+    .instructions {
+      margin-top: 30px;
+      padding: 15px;
+      background-color: #f8f9fa;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    .instructions h3 {
+      margin-top: 0;
+    }
+
+    .instructions ol {
+      padding-left: 20px;
+    }
+
+    .instructions code {
+      background-color: #e9ecef;
+      padding: 2px 4px;
+      border-radius: 3px;
+      font-family: monospace;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>Team Scoreboard</h1>
     
+    <div id="config-notice" class="config-notice">
+      <strong>Note:</strong> This scoreboard is configured to load data from Google Sheets. 
+      To use your own sheet, modify the <code>SPREADSHEET_ID</code> in the JavaScript.
+    </div>
+    
+    <!-- Loading indicator -->
+    <div id="loading" class="loading">
+      <div class="spinner"></div>
+      <p>Loading data from Google Sheet...</p>
+    </div>
+
+    <!-- Error message -->
+    <div id="error-message" class="error-message"></div>
+    
     <!-- Google Sheets sync status -->
     <div class="sync-container">
       <div class="sync-status">
-        Status: <span id="sync-status-text">Not synced</span>
+        Status: <span id="sync-status-text">Not loaded</span>
         <span id="last-sync-time"></span>
       </div>
-      <button id="sync-button" class="sync-button">Sync with Google Sheets</button>
+      <button id="refresh-button" class="sync-button">Refresh Data</button>
     </div>
     
     <div id="sync-message" class="sync-message">
-      Successfully synced with Google Sheets!
+      Successfully loaded data from Google Sheet!
     </div>
     
     <!-- Scoreboard -->
@@ -215,26 +293,64 @@
       >
       <button id="add-team-button" class="add-button">Add Team</button>
     </div>
+
+    <div class="instructions">
+      <h3>How to Set Up Your Google Sheet</h3>
+      <ol>
+        <li>Create a new Google Sheet</li>
+        <li>Add columns with headers: "ID", "Team Name", "Score"</li>
+        <li>Add your team data</li>
+        <li>Go to File > Share > Publish to web</li>
+        <li>Select "Entire Document" and "CSV" format</li>
+        <li>Click Publish and copy the URL</li>
+        <li>Replace the spreadsheet ID in the JavaScript code</li>
+      </ol>
+      <p><strong>Important:</strong> For this example to work, your Google Sheet must be published to the web as CSV.</p>
+    </div>
   </div>
 
   <script>
-    // Initial teams data
-    let teams = [
-      { id: 1, name: 'Team Alpha', score: 0 },
-      { id: 2, name: 'Team Beta', score: 0 }
-    ];
+    // CONFIGURATION - Replace this with your own spreadsheet ID
+    // The ID is the long string of characters in the sheet URL
+    const SPREADSHEET_ID = '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms'; // Example ID
+    const SHEET_INDEX = 1; // First sheet is 1, second is 2, etc.
     
-    let syncStatus = 'Not synced';
-    let lastSyncTime = null;
+    // Construct the CSV URL from Google Sheets
+    const SHEET_URL = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/export?format=csv&gid=0`;
+    
+    let teams = [];
     
     // DOM elements
     const teamsContainer = document.getElementById('teams-container');
     const newTeamInput = document.getElementById('new-team-input');
     const addTeamButton = document.getElementById('add-team-button');
-    const syncButton = document.getElementById('sync-button');
+    const refreshButton = document.getElementById('refresh-button');
     const syncStatusText = document.getElementById('sync-status-text');
     const lastSyncTimeSpan = document.getElementById('last-sync-time');
     const syncMessage = document.getElementById('sync-message');
+    const loadingElement = document.getElementById('loading');
+    const errorMessageElement = document.getElementById('error-message');
+    const configNotice = document.getElementById('config-notice');
+    
+    // Initialize the app
+    document.addEventListener('DOMContentLoaded', () => {
+      // Check if using the default ID
+      if (SPREADSHEET_ID === '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms') {
+        configNotice.style.display = 'block';
+      } else {
+        configNotice.style.display = 'none';
+      }
+      
+      // Load data on startup
+      loadSheetData();
+      
+      // Add event listeners
+      addTeamButton.addEventListener('click', addTeam);
+      newTeamInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') addTeam();
+      });
+      refreshButton.addEventListener('click', loadSheetData);
+    });
     
     // Render the scoreboard
     function renderScoreboard() {
@@ -242,7 +358,7 @@
       teamsContainer.innerHTML = '';
       
       if (teams.length === 0) {
-        teamsContainer.innerHTML = '<div class="scoreboard-empty">No teams added yet. Add a team below.</div>';
+        teamsContainer.innerHTML = '<div class="scoreboard-empty">No teams loaded. Check your Google Sheet or add a team below.</div>';
         return;
       }
       
@@ -284,7 +400,7 @@
       teams = teams.map(team => 
         team.id === teamId ? { ...team, score: team.score + 1 } : team
       );
-      updateSyncStatus('Changes not saved');
+      updateSyncStatus('Modified (refresh to reload from sheet)');
       renderScoreboard();
     }
     
@@ -293,7 +409,7 @@
       teams = teams.map(team => 
         team.id === teamId ? { ...team, score: Math.max(0, team.score - 1) } : team
       );
-      updateSyncStatus('Changes not saved');
+      updateSyncStatus('Modified (refresh to reload from sheet)');
       renderScoreboard();
     }
     
@@ -311,62 +427,129 @@
       
       teams.push(newTeam);
       newTeamInput.value = '';
-      updateSyncStatus('Changes not saved');
+      updateSyncStatus('Modified (refresh to reload from sheet)');
       renderScoreboard();
     }
     
     // Remove a team
     function removeTeam(teamId) {
       teams = teams.filter(team => team.id !== teamId);
-      updateSyncStatus('Changes not saved');
+      updateSyncStatus('Modified (refresh to reload from sheet)');
       renderScoreboard();
     }
     
     // Update sync status
     function updateSyncStatus(status) {
-      syncStatus = status;
       syncStatusText.textContent = status;
       
-      if (status === 'Synced') {
+      if (status === 'Loaded') {
         syncStatusText.style.color = '#28a745';
+      } else if (status.includes('Error')) {
+        syncStatusText.style.color = '#dc3545';
       } else {
         syncStatusText.style.color = '#ffc107';
       }
     }
-    
-    // Simulate syncing with Google Sheets
-    function syncWithGoogleSheets() {
-      updateSyncStatus('Syncing...');
+
+    // Parse CSV data
+    function parseCSV(text) {
+      const lines = text.split('\n');
+      const headers = lines[0].split(',');
       
-      // Simulate API delay
-      setTimeout(() => {
+      // Find the column indices
+      const idIndex = headers.findIndex(h => h.trim().toLowerCase() === 'id');
+      const nameIndex = headers.findIndex(h => h.trim().toLowerCase() === 'team name');
+      const scoreIndex = headers.findIndex(h => h.trim().toLowerCase() === 'score');
+      
+      if (idIndex === -1 || nameIndex === -1 || scoreIndex === -1) {
+        throw new Error('CSV must have columns for "ID", "Team Name", and "Score"');
+      }
+      
+      const result = [];
+      
+      // Skip the header row
+      for (let i = 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue; // Skip empty lines
+        
+        const values = lines[i].split(',');
+        
+        // Make sure we have values for all required fields
+        if (values.length <= Math.max(idIndex, nameIndex, scoreIndex)) continue;
+        
+        const id = parseInt(values[idIndex].trim());
+        const name = values[nameIndex].trim();
+        const score = parseInt(values[scoreIndex].trim()) || 0;
+        
+        if (isNaN(id) || !name) continue; // Skip invalid entries
+        
+        result.push({ id, name, score });
+      }
+      
+      return result;
+    }
+
+    // Load data from Google Sheet
+    async function loadSheetData() {
+      showLoading(true);
+      hideError();
+      updateSyncStatus('Loading...');
+      
+      try {
+        // Fetch the CSV data from the published Google Sheet
+        const response = await fetch(SHEET_URL);
+        
+        if (!response.ok) {
+          throw new Error(`Failed to load data: ${response.status} ${response.statusText}`);
+        }
+        
+        const csvText = await response.text();
+        teams = parseCSV(csvText);
+        
+        // Update UI
+        renderScoreboard();
+        updateSyncStatus('Loaded');
+        
+        // Update last sync time
         const now = new Date();
-        lastSyncTime = now.toLocaleTimeString();
-        lastSyncTimeSpan.textContent = ` • Last sync: ${lastSyncTime}`;
+        lastSyncTimeSpan.textContent = ` • Last refresh: ${now.toLocaleTimeString()}`;
         
-        updateSyncStatus('Synced');
-        
-        // Show sync message
+        // Show success message
         syncMessage.style.display = 'block';
-        
-        // Hide message after 3 seconds
         setTimeout(() => {
           syncMessage.style.display = 'none';
         }, 3000);
-      }, 1500);
+        
+      } catch (error) {
+        console.error('Error loading data:', error);
+        showError(`Failed to load sheet data: ${error.message}`);
+        updateSyncStatus('Error loading');
+        
+        // Initialize with empty teams if we can't load
+        if (teams.length === 0) {
+          teams = [
+            { id: 1, name: 'Team Alpha', score: 0 },
+            { id: 2, name: 'Team Beta', score: 0 }
+          ];
+          renderScoreboard();
+        }
+      }
+      
+      showLoading(false);
     }
-    
-    // Event listeners
-    addTeamButton.addEventListener('click', addTeam);
-    
-    newTeamInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') addTeam();
-    });
-    
-    syncButton.addEventListener('click', syncWithGoogleSheets);
-    
-    // Initial render
-    renderScoreboard();
+
+    // Helper functions for UI
+    function showLoading(show) {
+      loadingElement.style.display = show ? 'block' : 'none';
+    }
+
+    function showError(message) {
+      errorMessageElement.textContent = message;
+      errorMessageElement.style.display = 'block';
+    }
+
+    function hideError() {
+      errorMessageElement.style.display = 'none';
+    }
   </script>
 </body>
 </html>
