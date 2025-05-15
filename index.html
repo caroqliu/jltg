@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Team Scoreboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script type="module">
+        // Firebase App (the core Firebase SDK) is always required and must be listed first
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import {
+            getFirestore,
+            collection,
+            addDoc,
+            doc,
+            updateDoc,
+            deleteDoc,
+            onSnapshot,
+            query,
+            orderBy,
+            serverTimestamp,
+            setLogLevel
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Configuration (DO NOT EDIT THESE LINES) ---
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'team-scoreboard-default';
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        // --- End Configuration ---
+
+        let db;
+        let auth;
+        let userId;
+
+        // --- UI Elements ---
+        const teamNameInput = document.getElementById('teamNameInput');
+        const addTeamButton = document.getElementById('addTeamButton');
+        const scoreboardDiv = document.getElementById('scoreboard');
+        const messageDiv = document.getElementById('message'); // For user feedback
+
+        // --- Initialize Firebase and App ---
+        async functioninitializeAppAndAuth() {
+            if (Object.keys(firebaseConfig).length === 0) {
+                console.error("Firebase config is not available.");
+                showMessage("Error: Firebase configuration is missing. Please ensure the app is run in the correct environment.", "error");
+                return false;
+            }
+
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                setLogLevel('debug'); // Or 'silent' for production
+
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                    console.log("Signed in with custom token.");
+                } else {
+                    await signInAnonymously(auth);
+                    console.log("Signed in anonymously.");
+                }
+
+                userId = auth.currentUser?.uid || 'anonymous_user';
+                console.log("User ID:", userId);
+                return true;
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+                showMessage(`Error initializing Firebase: ${error.message}`, "error");
+                return false;
+            }
+        }
+
+        // --- Firestore Collection Reference ---
+        // Storing data in a public path for collaborative access
+        const teamsCollectionPath = `artifacts/${appId}/public/data/teams`;
+        let teamsCollectionRef; // Will be initialized after Firebase is ready
+
+        // --- Utility to show messages to the user ---
+        function showMessage(text, type = "info") {
+            if (!messageDiv) return;
+            messageDiv.textContent = text;
+            messageDiv.className = 'p-3 rounded-md text-sm mb-4';
+            if (type === "error") {
+                messageDiv.classList.add('bg-red-100', 'text-red-700');
+            } else if (type === "success") {
+                messageDiv.classList.add('bg-green-100', 'text-green-700');
+            } else {
+                messageDiv.classList.add('bg-blue-100', 'text-blue-700');
+            }
+            messageDiv.classList.remove('hidden');
+            setTimeout(() => {
+                if (messageDiv) messageDiv.classList.add('hidden');
+            }, 3000); // Hide after 3 seconds
+        }
+
+
+        // --- Add a new team ---
+        async function addTeam() {
+            if (!db) {
+                showMessage("Database not initialized.", "error");
+                return;
+            }
+            const teamName = teamNameInput.value.trim();
+            if (!teamName) {
+                showMessage("Team name cannot be empty.", "error");
+                return;
+            }
+
+            try {
+                await addDoc(teamsCollectionRef, {
+                    name: teamName,
+                    score: 0,
+                    createdAt: serverTimestamp() // For ordering
+                });
+                showMessage(`Team "${teamName}" added successfully!`, "success");
+                teamNameInput.value = ''; // Clear input
+            } catch (error) {
+                console.error("Error adding team: ", error);
+                showMessage(`Error adding team: ${error.message}`, "error");
+            }
+        }
+
+        // --- Update a team's score ---
+        async function updateScore(teamId, newScore) {
+            if (!db) {
+                showMessage("Database not initialized.", "error");
+                return;
+            }
+            if (typeof newScore !== 'number' || isNaN(newScore)) {
+                showMessage("Invalid score value.", "error");
+                return;
+            }
+            const teamDocRef = doc(db, teamsCollectionPath, teamId);
+            try {
+                await updateDoc(teamDocRef, {
+                    score: newScore
+                });
+                // Message will be shown by the optimistic update in render or by onSnapshot
+            } catch (error) {
+                console.error("Error updating score: ", error);
+                showMessage(`Error updating score: ${error.message}`, "error");
+            }
+        }
+
+        // --- Delete a team ---
+        async function deleteTeam(teamId) {
+            if (!db) {
+                showMessage("Database not initialized.", "error");
+                return;
+            }
+            const teamDocRef = doc(db, teamsCollectionPath, teamId);
+            try {
+                await deleteDoc(teamDocRef);
+                showMessage("Team deleted successfully.", "success");
+            } catch (error) {
+                console.error("Error deleting team: ", error);
+                showMessage(`Error deleting team: ${error.message}`, "error");
+            }
+        }
+
+        // --- Render the scoreboard ---
+        function renderScoreboard(teams) {
+            if (!scoreboardDiv) return;
+            scoreboardDiv.innerHTML = ''; // Clear existing scoreboard
+
+            if (teams.length === 0) {
+                scoreboardDiv.innerHTML = '<p class="text-gray-500">No teams added yet. Add a team to get started!</p>';
+                return;
+            }
+
+            const ul = document.createElement('ul');
+            ul.className = 'space-y-4';
+
+            teams.forEach(team => {
+                const li = document.createElement('li');
+                li.className = 'p-4 bg-white shadow-lg rounded-lg flex flex-col sm:flex-row justify-between items-center space-y-3 sm:space-y-0';
+                li.setAttribute('data-id', team.id);
+
+                const teamInfoDiv = document.createElement('div');
+                teamInfoDiv.className = 'flex-grow';
+                const teamNameEl = document.createElement('span');
+                teamNameEl.className = 'text-xl font-semibold text-indigo-700';
+                teamNameEl.textContent = team.name;
+                const teamScoreEl = document.createElement('span');
+                teamScoreEl.className = 'ml-3 text-xl font-bold text-gray-800';
+                teamScoreEl.textContent = `Score: ${team.score}`;
+                teamInfoDiv.appendChild(teamNameEl);
+                teamInfoDiv.appendChild(teamScoreEl);
+
+                const controlsDiv = document.createElement('div');
+                controlsDiv.className = 'flex items-center space-x-2';
+
+                const decreaseButton = document.createElement('button');
+                decreaseButton.textContent = '-';
+                decreaseButton.className = 'px-3 py-1 bg-yellow-500 hover:bg-yellow-600 text-white font-bold rounded-md transition duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-yellow-400';
+                decreaseButton.onclick = () => updateScore(team.id, Math.max(0, team.score - 1)); // Prevent negative scores
+
+                const increaseButton = document.createElement('button');
+                increaseButton.textContent = '+';
+                increaseButton.className = 'px-3 py-1 bg-green-500 hover:bg-green-600 text-white font-bold rounded-md transition duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-400';
+                increaseButton.onclick = () => updateScore(team.id, team.score + 1);
+
+                const deleteButton = document.createElement('button');
+                deleteButton.textContent = 'Remove';
+                deleteButton.className = 'px-3 py-1 bg-red-500 hover:bg-red-600 text-white font-bold rounded-md transition duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-red-400';
+                deleteButton.onclick = () => {
+                    // Basic confirmation before deleting
+                    if (confirm(`Are you sure you want to remove team "${team.name}"?`)) {
+                        deleteTeam(team.id);
+                    }
+                };
+                
+                controlsDiv.appendChild(decreaseButton);
+                controlsDiv.appendChild(increaseButton);
+                controlsDiv.appendChild(deleteButton);
+
+                li.appendChild(teamInfoDiv);
+                li.appendChild(controlsDiv);
+                ul.appendChild(li);
+            });
+            scoreboardDiv.appendChild(ul);
+        }
+
+        // --- Listen for real-time updates ---
+        function listenForScoreUpdates() {
+            if (!db) {
+                showMessage("Database not initialized. Cannot listen for updates.", "error");
+                return;
+            }
+            teamsCollectionRef = collection(db, teamsCollectionPath);
+            const q = query(teamsCollectionRef, orderBy("createdAt", "asc")); // Order by creation time
+
+            onSnapshot(q, (snapshot) => {
+                const teams = [];
+                snapshot.forEach((doc) => {
+                    teams.push({ id: doc.id, ...doc.data() });
+                });
+                renderScoreboard(teams);
+            }, (error) => {
+                console.error("Error listening to scoreboard updates: ", error);
+                showMessage(`Error fetching scoreboard: ${error.message}`, "error");
+                // Optionally, render an error state for the scoreboard
+                if (scoreboardDiv) scoreboardDiv.innerHTML = '<p class="text-red-500">Could not load scoreboard. Please try again later.</p>';
+            });
+        }
+
+        // --- Event Listeners ---
+        window.onload = async () => {
+            const firebaseReady = await initializeAppAndAuth();
+            if (firebaseReady) {
+                if (addTeamButton) {
+                    addTeamButton.addEventListener('click', addTeam);
+                } else {
+                    console.error("Add team button not found");
+                }
+
+                if (teamNameInput) {
+                    teamNameInput.addEventListener('keypress', (event) => {
+                        if (event.key === 'Enter') {
+                            addTeam();
+                        }
+                    });
+                } else {
+                    console.error("Team name input not found");
+                }
+                listenForScoreUpdates(); // Start listening for updates
+            } else {
+                console.error("Firebase initialization failed. Scoreboard will not function.");
+                // Display a more prominent error to the user on the page itself
+                if (scoreboardDiv) scoreboardDiv.innerHTML = '<div class="p-4 bg-red-100 text-red-700 rounded-md">Critical Error: Could not connect to the backend services. Scoreboard functionality is unavailable.</div>';
+            }
+        };
+
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f4f8; /* Light blue-gray background */
+        }
+        /* Custom styles for better button feel */
+        button {
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        button:active {
+            transform: translateY(1px);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+        /* Ensure message div is not initially shown if empty */
+        #message.hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center p-4 sm:p-8">
+
+    <div class="w-full max-w-2xl bg-white p-6 sm:p-8 rounded-xl shadow-2xl">
+        <header class="mb-6 text-center">
+            <h1 class="text-3xl sm:text-4xl font-bold text-indigo-700">Team Scoreboard</h1>
+        </header>
+
+        <div id="message" class="hidden p-3 rounded-md text-sm mb-4"></div>
+
+        <section id="addTeamSection" class="mb-8 p-6 bg-indigo-50 rounded-lg shadow-md">
+            <h2 class="text-xl font-semibold text-indigo-600 mb-3">Add New Team</h2>
+            <div class="flex flex-col sm:flex-row sm:space-x-3 space-y-3 sm:space-y-0">
+                <input type="text" id="teamNameInput" placeholder="Enter team name" class="flex-grow p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition duration-150">
+                <button id="addTeamButton" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-md transition duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
+                    Add Team
+                </button>
+            </div>
+        </section>
+
+        <section id="scoreboardSection">
+            <h2 class="text-2xl font-semibold text-indigo-600 mb-4">Live Scores</h2>
+            <div id="scoreboard" class="space-y-4">
+                <p class="text-gray-500">Loading scoreboard...</p>
+            </div>
+        </section>
+    </div>
+
+    <footer class="mt-12 text-center text-sm text-gray-500">
+        <p>&copy; 2025 Scoreboard App. All rights reserved.</p>
+    </footer>
+
+</body>
+</html>
